@@ -16,6 +16,7 @@ if(!require(ggthemes)) install.packages("ggthemes", repos = "http://cran.us.r-pr
 if(!require(corrr)) install.packages("corrr", repos = "http://cran.us.r-project.org")
 if(!require(ggcorrplot)) install.packages("ggcorrplot", repos = "http://cran.us.r-project.org")
 if(!require(factoextra)) install.packages("factoextra", repos = "http://cran.us.r-project.org")
+if(!require(recosystem)) install.packages("recosystem", repos = "http://cran.us.r-project.org")
 
 # Libraries required to run the proyect
 library(tidyverse)
@@ -27,6 +28,7 @@ library(ggthemes)
 library(corrr)
 library(ggcorrplot)
 library(factoextra)
+library(recosystem)
 
 options(digits = 5)
 options(timeout = 120)
@@ -165,6 +167,11 @@ max_rating_movie_year <- str_extract(summary_edx[6,4], year_pattern_summary)
 genres_pattern <- "([:alpha:]+[-]?[:alpha:]*[:space:]?[:alpha:]*[:space:]?[:alpha:]*)" 
 
 edx <- edx %>%
+  mutate(real_genres = str_extract(genres, genres_pattern)) %>%
+  relocate(real_genres, .after = genres) %>%
+  as.data.table()
+
+final_holdout_test <- final_holdout_test %>%
   mutate(real_genres = str_extract(genres, genres_pattern)) %>%
   relocate(real_genres, .after = genres) %>%
   as.data.table()
@@ -416,6 +423,17 @@ avg_ratings_by_genres %>%
   column_spec(2, bold = TRUE, color = "#00688B") %>%
   footnote(general = "Source data: https://grouplens.org/datasets/movielens/10m/")
 
+#show in a plot ratings by genres of movie
+  ggplot(edx, aes(real_genres, rating)) +
+  geom_boxplot(col = "#00688B") +
+  labs(title = "Quartiles(min-25%-median-75%-max-outliers) by genres of movie",
+       x = "Genres",
+       y = "Ratings",
+       caption = "Source data: https://grouplens.org/datasets/movielens/10m/") +
+  theme(axis.title.x=element_text(size=12, angle=0, face = "bold"))+  
+  theme(axis.text.x=element_text(size=10, angle=90, hjust=1, face = "bold")) +
+  theme(axis.text.y=element_text(size=10, angle=90, face = "bold"))
+
 #########################################################
 # g. Number of Movies by genre year
 #########################################################
@@ -507,191 +525,7 @@ ggplot(avg_rating_by_year_movie_genres, aes(x = year_movie, y = average_year_mov
   scale_color_discrete(name = "Genre")
 
 #########################################################
-# 3. MODELING RESULTS
-#########################################################
-
-#########################################################
-# I. A First model 
-#########################################################
-
-#RMSE formula
-RMSE <- function(true_ratings, predicted_ratings){
-  sqrt(mean((true_ratings - predicted_ratings)^2))
-}
-
-#Mean movies rating (mu) to training set (edx) 3.51
-edx_mu_hat <- mean(edx$rating)
-
-#Naive RMSE obtain use test set (final_holdout_test) rating and mean (mu) to training set (edx)
-result_nai <- RMSE(final_holdout_test$rating, edx_mu_hat)
-result_naive <- tibble(Model = "Naive RMSE", RMSE = result_nai) 
-result_naive %>%
-  knitr::kable()
-
-#Any number other than ^mu_hat would result into a higher RMSE 
-predictions <- rep(2.5, nrow(final_holdout_test))
-result_dis_mu <- RMSE(final_holdout_test$rating, predictions)
-
-result_distinct_mu <- tibble(Model = "Distinct value mu_hat RMSE", RMSE = result_dis_mu) 
-result_distinct_mu %>%
-  knitr::kable()
-
-#########################################################
-# II. Modeling movie effects
-#########################################################
-
-#The least squares estimate ^b_i is just the average of Y(u,i) - ^mu for each movie
-mu <- mean(edx$rating) 
-movie_bias <- edx %>% 
-  group_by(movieId) %>% 
-  summarize(b_i = mean(rating - mu))
-
-#Histogram graphic show 0 equivalent 3.51 mean rating movie, 1.5 is equal to 5 rating and -3 is equal to 0.5 rating 
-ggplot(movie_bias, aes(x = b_i)) +
-  geom_histogram(bins = 35, fill = "#27408B", color = "black") +
-  labs(title = "Movie bias",
-       x = "Bias movies",
-       y = "Number of movies",
-       caption = "Source data: https://grouplens.org/datasets/movielens/10m/") +
-  theme(axis.title.x=element_text(size=12, angle=0, face = "bold"))+  
-  theme(axis.text.x=element_text(size=10, angle=0, face = "bold")) +
-  theme(axis.text.y=element_text(size=10, angle=90, face = "bold"))+
-  theme_gdocs()
-
-#create a predicted rating add mu + b_i (bias movie) 
-predicted_ratings <- mu + final_holdout_test %>% 
-  left_join(movie_bias, by='movieId') %>%
-  pull(b_i)
-
-#calculate RMSE with predicted_ratings and test set final_holdout_test
-model_1 <- RMSE(predicted_ratings, final_holdout_test$rating)
-
-model_1_rmse <- tibble(Model = "Movie Effect Model", RMSE = model_1)
-
-model_1_rmse %>% 
-  knitr::kable()
-
-#########################################################
-# III. Modeling user effects 
-#########################################################
-
-#We will compute an approximation by computing ^mu  and ^b_i and estimating ^b_u as the average of  ^y(u,i)- ^mu - ^b_i
-user_bias <- edx %>% 
-  left_join(movie_bias, by='movieId') %>%
-  group_by(userId) %>%
-  summarize(b_u = mean(rating - mu - b_i))
-
-#Histogram graphic bias user 
-ggplot(user_bias, aes(x = b_u)) +
-  geom_histogram(bins = 35, fill = "#00688B", color = "black") +
-  labs(title = "User bias",
-       x = "Bias user",
-       y = "Number of movies",
-       caption = "Source data: https://grouplens.org/datasets/movielens/10m/") +
-  theme(axis.title.x=element_text(size=12, angle=0, face = "bold"))+  
-  theme(axis.text.x=element_text(size=10, angle=0, face = "bold")) +
-  theme(axis.text.y=element_text(size=10, angle=90, face = "bold"))+
-  theme_stata()
-
-#create a predicted rating add mu + b_i (bias movie) + b_u (bias user)
-predicted_ratings <- final_holdout_test %>% 
-  left_join(movie_bias, by='movieId') %>%
-  left_join(user_bias, by='userId') %>%
-  mutate(pred = mu + b_i + b_u) %>%
-  pull(pred)
-
-#calculate RMSE with predicted_ratings and test set final_holdout_test
-model_2 <- RMSE(predicted_ratings, final_holdout_test$rating)
-
-model_2_rmse <- tibble(Model = "Movie + User Effect Model", RMSE = model_2)
-
-model_2_rmse %>% 
-  knitr::kable()
-
-#########################################################
-# IV. Regularized movie + user effect model
-#########################################################
-
-#The idea is to add a tuning parameter lamba to further reduce the RMSE
-#The idea is to penalize outliers from the Movie Bias and User Bias sets which shall optimise the recommendation system
-
-lambdas_regularize <- seq(0, 10, 0.25)
-
-rmse_regularize <- sapply(lambdas_regularize, function(l){
-  
-  edx_mu <- mean(edx$rating)
-  
-  b_i <- edx %>% 
-    group_by(movieId) %>%
-    summarize(b_i = sum(rating - edx_mu)/(n()+l))
-  
-  b_u <- edx %>% 
-    left_join(b_i, by="movieId") %>%
-    group_by(userId) %>%
-    summarize(b_u = sum(rating - edx_mu - b_i)/(n()+l))
-  
-  predicted_ratings <- final_holdout_test %>% 
-    left_join(b_i, by = "movieId") %>%
-    left_join(b_u, by = "userId") %>%
-    mutate(pred = edx_mu + b_i + b_u) %>%
-    pull(pred)
-  
-  return(RMSE(predicted_ratings, final_holdout_test$rating))
-})
-
-#Discover which lambawill be best at reducing the RMSE
-
-lambda <- lambdas_regularize[which.min(rmse_regularize)]
-lambda
-
-ggplot(mapping = aes(x = lambdas_regularize, y = rmse_regularize)) + 
-  geom_point(color = "#00BFFF") +
-  labs(title = "Distribution Lambdas", 
-       x = "Lambda", 
-       y = "RMSE", 
-       caption = "Source data: https://grouplens.org/datasets/movielens/10m/") +
-  geom_smooth(color = "black") + 
-  theme_economist()
-
-#We will use the best lamba to reduce our RMSE regularized Movie + User Effect Model
-
-b_i <- edx %>% 
-  group_by(movieId) %>%
-  summarize(b_i = sum(rating - mu)/(n()+lambda))
-
-b_u <- edx %>% 
-  left_join(b_i, by="movieId") %>%
-  group_by(userId) %>%
-  summarize(b_u = sum(rating - mu - b_i)/(n()+lambda))
-
-predicted_ratings <- final_holdout_test %>% 
-  left_join(b_i, by = "movieId") %>%
-  left_join(b_u, by = "userId") %>%
-  mutate(pred = mu + b_i + b_u) %>%
-  pull(pred)
-
-#calculate RMSE with predicted_ratings and test set final_holdout_test
-
-model_3 <- RMSE(predicted_ratings, final_holdout_test$rating)
-
-model_3_rmse <- tibble(Model = "Regularized Movie + User Effect Model", RMSE = model_3)
-
-model_3_rmse %>% 
-  knitr::kable()
-
-#########################################################
-# 4. RESULTS
-#########################################################
-
-#Summarize the models RMSE 
-
-results_rmse <- tibble(Model = c("Naive RMSE", "Movie Effect Model", "Movie + User Effect Model", "Regularized Movie + User Effect Model"), RMSE = c(result_nai, model_1, model_2, model_3))
-
-results_rmse %>% 
-  knitr::kable()
-
-#########################################################
-# 5. PCA
+# 3. PCA
 #########################################################
 
 #create a data for realize a PCA study with 8 genres with the users above the median 62 rating movies
@@ -762,3 +596,250 @@ fviz_pca_var(data.pca, col.var = "cos2",
              gradient.cols = c("black", "#FFA500", "#2E8B57"),
              repel = TRUE,
              ggtheme = ggplot2::theme_light())
+
+#########################################################
+# 4. MODELING RESULTS
+#########################################################
+
+#########################################################
+# I. A First model 
+#########################################################
+
+#RMSE formula
+RMSE <- function(true_ratings, predicted_ratings){
+  sqrt(mean((true_ratings - predicted_ratings)^2))
+}
+
+#Mean movies rating (mu) to training set (edx) 3.51
+edx_mu_hat <- mean(edx$rating)
+
+#Naive RMSE obtain use test set (final_holdout_test) rating and mean (mu) to training set (edx)
+result_nai <- RMSE(final_holdout_test$rating, edx_mu_hat)
+result_naive <- tibble(Model = "Naive RMSE", RMSE = result_nai) 
+result_naive %>%
+  knitr::kable()
+
+#Any number other than ^mu_hat would result into a higher RMSE 
+predictions <- rep(2.5, nrow(final_holdout_test))
+result_dis_mu <- RMSE(final_holdout_test$rating, predictions)
+
+result_distinct_mu <- tibble(Model = "Distinct value mu_hat RMSE", RMSE = result_dis_mu) 
+result_distinct_mu %>% kable()
+
+#########################################################
+# II. Modeling movie effects
+#########################################################
+
+#The least squares estimate ^b_i is just the average of Y(u,i) - ^mu for each movie
+mu <- mean(edx$rating) 
+movie_bias <- edx %>% 
+  group_by(movieId) %>% 
+  summarize(b_i = mean(rating - mu))
+
+#Histogram graphic show 0 equivalent 3.51 mean rating movie, 1.5 is equal to 5 rating and -3 is equal to 0.5 rating 
+ggplot(movie_bias, aes(x = b_i)) +
+  geom_histogram(bins = 35, fill = "#27408B", color = "black") +
+  labs(title = "Movie bias",
+       x = "Bias movies",
+       y = "Number of movies",
+       caption = "Source data: https://grouplens.org/datasets/movielens/10m/") +
+  theme(axis.title.x=element_text(size=12, angle=0, face = "bold"))+  
+  theme(axis.text.x=element_text(size=10, angle=0, face = "bold")) +
+  theme(axis.text.y=element_text(size=10, angle=90, face = "bold"))+
+  theme_gdocs()
+
+#create a predicted rating add mu + b_i (bias movie) 
+predicted_ratings <- mu + final_holdout_test %>% 
+  left_join(movie_bias, by='movieId') %>%
+  pull(b_i)
+
+#calculate RMSE with predicted_ratings and test set final_holdout_test
+model_1 <- RMSE(predicted_ratings, final_holdout_test$rating)
+
+model_1_rmse <- tibble(Model = "Movie Effect Model", RMSE = model_1)
+
+model_1_rmse %>% kable()
+
+#########################################################
+# III. Modeling user effects 
+#########################################################
+
+#We will compute an approximation by computing ^mu  and ^b_i and estimating ^b_u as the average of  ^y(u,i)- ^mu - ^b_i
+user_bias <- edx %>% 
+  left_join(movie_bias, by='movieId') %>%
+  group_by(userId) %>%
+  summarize(b_u = mean(rating - mu - b_i))
+
+#Histogram graphic bias user 
+ggplot(user_bias, aes(x = b_u)) +
+  geom_histogram(bins = 35, fill = "#00688B", color = "black") +
+  labs(title = "User bias",
+       x = "Bias user",
+       y = "Number of movies",
+       caption = "Source data: https://grouplens.org/datasets/movielens/10m/") +
+  theme(axis.title.x=element_text(size=12, angle=0, face = "bold"))+  
+  theme(axis.text.x=element_text(size=10, angle=0, face = "bold")) +
+  theme(axis.text.y=element_text(size=10, angle=90, face = "bold"))+
+  theme_stata()
+
+#create a predicted rating add mu + b_i (bias movie) + b_u (bias user)
+predicted_ratings <- final_holdout_test %>% 
+  left_join(movie_bias, by='movieId') %>%
+  left_join(user_bias, by='userId') %>%
+  mutate(pred = mu + b_i + b_u) %>%
+  pull(pred)
+
+#calculate RMSE with predicted_ratings and test set final_holdout_test
+model_2 <- RMSE(predicted_ratings, final_holdout_test$rating)
+
+model_2_rmse <- tibble(Model = "Movie + User Effect Model", RMSE = model_2)
+
+model_2_rmse %>% kable()
+
+#########################################################
+# IV. Regularized movie + user effect model
+#########################################################
+
+#The idea is to add a tuning parameter lamba to further reduce the RMSE
+#The idea is to penalize outliers from the Movie Bias and User Bias sets which shall optimize the recommendation system
+
+lambdas_regularize <- seq(0, 10, 0.25)
+
+rmse_regularize <- sapply(lambdas_regularize, function(l){
+  
+  edx_mu <- mean(edx$rating)
+  
+  b_i <- edx %>% 
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - edx_mu)/(n()+l))
+  
+  b_u <- edx %>% 
+    left_join(b_i, by="movieId") %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - edx_mu - b_i)/(n()+l))
+  
+  predicted_ratings <- final_holdout_test %>% 
+    left_join(b_i, by = "movieId") %>%
+    left_join(b_u, by = "userId") %>%
+    mutate(pred = edx_mu + b_i + b_u) %>%
+    pull(pred)
+  
+  return(RMSE(predicted_ratings, final_holdout_test$rating))
+})
+
+#Discover which lamba will be best at reducing the RMSE
+
+lambda <- lambdas_regularize[which.min(rmse_regularize)]
+lambda
+
+ggplot(mapping = aes(x = lambdas_regularize, y = rmse_regularize)) + 
+  geom_point(color = "#00BFFF") +
+  labs(title = "Distribution Lambdas", 
+       x = "Lambda", 
+       y = "RMSE", 
+       caption = "Source data: https://grouplens.org/datasets/movielens/10m/") +
+  geom_smooth(color = "black") + 
+  theme_economist()
+
+#We will use the best lamba to reduce our RMSE regularized Movie + User Effect Model
+
+b_i <- edx %>% 
+  group_by(movieId) %>%
+  summarize(b_i = sum(rating - mu)/(n()+lambda))
+
+b_u <- edx %>% 
+  left_join(b_i, by="movieId") %>%
+  group_by(userId) %>%
+  summarize(b_u = sum(rating - mu - b_i)/(n()+lambda))
+
+predicted_ratings <- final_holdout_test %>% 
+  left_join(b_i, by = "movieId") %>%
+  left_join(b_u, by = "userId") %>%
+  mutate(pred = mu + b_i + b_u) %>%
+  pull(pred)
+
+#calculate RMSE with predicted_ratings and test set final_holdout_test
+
+model_3 <- RMSE(predicted_ratings, final_holdout_test$rating)
+
+model_3_rmse <- tibble(Model = "Regularized Movie + User Effect Model", RMSE = model_3)
+
+model_3_rmse %>% kable()
+
+##################################################################
+# V. Regularized movie + user effect model + genres effecft model
+#################################################################
+
+#The idea is to add a tuning parameter lamba to further reduce the RMSE
+#The idea is to penalize outliers from the Movie, User and genres Bias sets which shall optimize the recommendation system
+
+#We will use the best lamba to reduce our RMSE regularized Movie + User Effect Model + Genres Effect Model
+
+b_i <- edx %>% 
+  group_by(movieId) %>%
+  summarize(b_i = sum(rating - mu)/(n()+lambda))
+
+b_u <- edx %>% 
+  left_join(b_i, by="movieId") %>%
+  group_by(userId) %>%
+  summarize(b_u = sum(rating - mu - b_i)/(n()+lambda))
+
+b_g <- edx %>% 
+  left_join(b_i, by="movieId") %>%
+  left_join(b_u, by="userId") %>%
+  group_by(real_genres) %>%
+  summarize(b_g = sum(rating - mu - b_i - b_u)/(n()+lambda))
+
+predicted_ratings <- final_holdout_test %>% 
+  left_join(b_i, by = "movieId") %>%
+  left_join(b_u, by = "userId") %>%
+  left_join(b_g, by = "real_genres") %>%
+  mutate(pred = mu + b_i + b_u + b_g) %>%
+  pull(pred)
+
+#calculate RMSE with predicted_ratings and test set final_holdout_test
+
+model_4 <- RMSE(predicted_ratings, final_holdout_test$rating)
+
+model_4_rmse <- tibble(Model = "Regularized Movie + User Effect Model + Genres Effect Model", RMSE = model_4)
+
+model_4_rmse %>% kable()
+
+#########################################################
+# 5. RECO 
+#########################################################
+
+niter <- 25 
+# Train the reco model with the fixed niter on the entire edx set
+reco_train <- data_memory(edx$userId, edx$movieId, edx$rating)
+reco_model <- Reco()
+
+reco_model$train(reco_train, opts = list(dim = 10, niter = niter,  nthread = 8, costp_l2 = 0.1, costq_l2 = 0.1, lrate = 0.05))
+
+# Prepare final hold-out test data
+reco_test <- data_memory(final_holdout_test$userId, final_holdout_test$movieId)
+
+# Predict ratings for the final hold-out test set
+predicted_holdout_ratings <- reco_model$predict(reco_test)
+
+# Add predictions to final hold-out test set
+final_holdout_test$predicted_rating <- predicted_holdout_ratings
+
+# Calculate RMSE for the final hold-out test set
+model_reco <-  RMSE(final_holdout_test$predicted_rating, final_holdout_test$rating)
+model_reco_rmse <- tibble(Model = "Reco matrix factorization", RMSE = model_reco)
+
+model_reco_rmse %>% kable()
+
+#########################################################
+# 6. RESULTS
+#########################################################
+
+#Summarize the models RMSE 
+
+results_rmse <- tibble(Model = c("Naive RMSE", "Movie Effect Model", "Movie + User Effect Model", "Regularized Movie + User Effect Model",
+                                 "Regularized Movie + User Effect Model + Genres Effect Model", "Reco matrix factorization"),
+                       RMSE = c(result_nai, model_1, model_2, model_3, model_4, model_reco))
+
+results_rmse %>% kable()
+
